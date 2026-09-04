@@ -16,15 +16,32 @@ diagrams preserved exactly as drawn.
 ```sh
 python3 rfc2html.py rfc8340.txt -o rfc8340.html
 python3 rfc2html.py rfc8340.txt -o rfc8340.html --title "YANG Tree Diagrams"
+
+# Or skip the download step and fetch the RFC directly:
+python3 rfc2html.py 8340
+python3 rfc2html.py rfc6241 -o netconf.html
+python3 rfc2html.py https://www.ietf.org/ietf-ftp/rfc/rfc6241.html
 ```
 
 | Argument | Description |
 | --- | --- |
-| `input` | Path to the RFC `.txt` file (required) |
-| `-o`, `--output` | Output `.html` path (default: alongside the input, same name with `.html`) |
+| `input` | A local RFC `.txt` file, or an RFC to fetch: a bare number (`8340`), an `rfcNNNN` token, or any URL that names one (required) |
+| `-o`, `--output` | Output `.html` path (default: input's filename, or `rfcNNNN.html` when fetched, with `.html`) |
 | `--title` | Override the detected document title |
 
 No dependencies beyond the Python 3 standard library.
+
+### Fetching an RFC directly
+
+If `input` isn't a path to an existing local file, it's treated as an RFC
+reference and fetched instead. A bare number, an `rfcNNNN` token, or a URL
+all work — the last path segment of a URL is parsed for its RFC number
+(so `https://www.ietf.org/ietf-ftp/rfc/rfc6241.html` and
+`https://www.rfc-editor.org/rfc/rfc6241.txt` both resolve to RFC 6241).
+Regardless of which host or extension was given, the actual fetch always
+goes to `https://www.rfc-editor.org/rfc/rfcNNNN.txt` — the canonical
+fixed-width plain text — since that's the format this script parses; other
+mirrors (like ietf.org's own `.html` rendering) don't serve that format.
 
 ## What it does
 

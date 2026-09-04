@@ -15,6 +15,13 @@ Usage:
     python3 rfc2html.py rfc8340.txt -o rfc8340.html
     python3 rfc2html.py rfc8340.txt -o rfc8340.html --title "YANG Tree Diagrams"
 
+    # Or fetch the RFC directly instead of pointing at a local file: a bare
+    # number, an "rfcNNNN" token, or any URL ending in .../rfcNNNN(.txt/.html)
+    # all resolve to the canonical plain text at rfc-editor.org.
+    python3 rfc2html.py 8340
+    python3 rfc2html.py rfc6241 -o netconf.html
+    python3 rfc2html.py https://www.ietf.org/ietf-ftp/rfc/rfc6241.html
+
 Heuristics used (see comments below for detail):
   * Body prose is indented; headings and the document title are not.
   * A block is treated as a verbatim diagram if it contains alignment
@@ -34,22 +41,78 @@ from __future__ import annotations
 import argparse
 import html
 import re
-import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 # --------------------------------------------------------------------------
-# Step 1: load the file and strip pagination (form feeds, running
-# header/footer lines) so the text reads as one continuous document again.
+# Step 0: resolve the input -- a local .txt path, a bare RFC number, or a
+# URL -- into raw document text, fetching it from the IETF's canonical
+# plain-text source when it isn't already a file on disk.
+# --------------------------------------------------------------------------
+
+RFC_TXT_URL = "https://www.rfc-editor.org/rfc/rfc{num}.txt"
+
+
+def extract_rfc_number(spec: str) -> Optional[str]:
+    """Pull a bare RFC number out of a plain number, an "rfcNNNN" token, or
+    a URL/path whose last path segment names the RFC -- e.g. the trailing
+    "rfc6241" in "https://www.ietf.org/ietf-ftp/rfc/rfc6241.html". Returns
+    None if `spec` doesn't look like an RFC reference at all."""
+    tail = re.split(r"[\\/]", spec.rstrip("/"))[-1]
+    tail = re.sub(r"\.(txt|html?|pdf|xml)$", "", tail, flags=re.IGNORECASE)
+    m = re.match(r"^(?:rfc\s*)?0*(\d{1,5})$", tail.strip(), re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def fetch_url(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "rfc2html.py"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"error: failed to fetch {url}: HTTP {e.code}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"error: failed to fetch {url}: {e.reason}")
+    return data.decode("utf-8", errors="replace")
+
+
+def resolve_source(spec: str) -> Tuple[str, str]:
+    """Turn a CLI `input` argument into (raw_text, default_output_stem).
+
+    A path to an existing local file is read as-is. Anything else -- a bare
+    RFC number, an "rfcNNNN" token, or a URL -- is resolved to an RFC number
+    and fetched from rfc-editor.org's canonical plain-text archive. The
+    fetch always targets rfc-editor.org regardless of what host a given URL
+    named, since that's the only place this script knows how to get the
+    fixed-width plain text it actually parses (an ietf.org page at the same
+    path, for instance, serves rendered HTML, not plain text)."""
+    if not re.match(r"^https?://", spec, re.IGNORECASE):
+        path = Path(spec)
+        if path.exists():
+            return path.read_text(encoding="utf-8", errors="replace"), path.stem
+
+    num = extract_rfc_number(spec)
+    if num is None:
+        raise SystemExit(
+            f"error: {spec!r} is not an existing file and doesn't look like "
+            "an RFC number or URL (expected e.g. '8340', 'rfc8340', or "
+            "a URL ending in '.../rfc8340.txt')"
+        )
+    return fetch_url(RFC_TXT_URL.format(num=num)), f"rfc{num}"
+
+
+# --------------------------------------------------------------------------
+# Step 1: strip pagination (form feeds, running header/footer lines) so the
+# text reads as one continuous document again.
 # --------------------------------------------------------------------------
 
 FOOTER_RE = re.compile(r"\[Page\s+\d+\]\s*$")
 
 
-def load_and_depaginate(path: Path) -> str:
-    raw = path.read_text(encoding="utf-8", errors="replace")
-
+def load_and_depaginate(raw: str) -> str:
     # Split into physical pages on the form-feed character if present.
     if "\f" in raw:
         pages = raw.split("\f")
@@ -668,20 +731,22 @@ def render_html(masthead: Optional[List[str]], title: Optional[str], nodes: List
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("input", type=Path, help="Path to the RFC .txt file")
+    parser.add_argument(
+        "input",
+        help="Path to a local RFC .txt file, or an RFC to fetch: a bare "
+             "number, an 'rfcNNNN' token, or a URL naming one",
+    )
     parser.add_argument("-o", "--output", type=Path, help="Output .html path (default: alongside input)")
     parser.add_argument("--title", help="Override the detected document title")
     args = parser.parse_args(argv)
 
-    if not args.input.exists():
-        print(f"error: {args.input} not found", file=sys.stderr)
-        return 1
+    raw_text, default_stem = resolve_source(args.input)
 
-    text = load_and_depaginate(args.input)
+    text = load_and_depaginate(raw_text)
     masthead, title, nodes, headings = parse_document(text)
     out_html = render_html(masthead, title, nodes, headings, args.title)
 
-    out_path = args.output or args.input.with_suffix(".html")
+    out_path = args.output or Path(default_stem).with_suffix(".html")
     out_path.write_text(out_html, encoding="utf-8")
     print(f"Wrote {out_path} ({len(headings)} sections detected)")
     return 0
