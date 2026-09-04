@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# Generated HTML output from running rfc2html.py locally
+*.html
